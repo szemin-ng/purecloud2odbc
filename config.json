@@ -1,0 +1,13 @@
+{
+    "pureCloudRegion": "mypurecloud.com.au",
+    "pureCloudClientId": "62efbdcb-7e92-4f15-bf90-f6bcef9bcd38",
+    "pureCloudClientSecret": "ad6xRwuthCdjKu5uTyJ5AhST4n8pEqwMromZeMbLlko",
+    "odbcDsn": "PureCloudStats",
+    "granularity": "PT30M",
+    "queues": [
+        "c2788c7e-c8c5-40ac-97d9-51c3b364479b", "276148ba-40ad-4bad-a5a3-fedb9ddcbbb5"
+    ],
+    "agents": [
+        "asd", "asd", "asd"
+    ]
+}
