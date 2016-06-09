@@ -119,14 +119,16 @@ func getPureCloudQueueStats() (resp purecloud.AggregateQueryResponse, err error)
 	var l *time.Location
 	l, _ = time.LoadLocation("Local")
 
+	// Calculate previous interval
 	if appConfig.Granularity == "P1D" {
 		y, m, d = time.Now().Date()
-		startInterval = time.Date(y, m, d, 0, 0, 0, 0, l)
-		endInterval = startInterval.Add(time.Hour * 24)
+		endInterval = time.Date(y, m, d, 0, 0, 0, 0, l)
+		startInterval = endInterval.AddDate(0, 0, -1)
 	} else {
-		startInterval = time.Now().Truncate(supportedGranularity[appConfig.Granularity])
-		endInterval = startInterval.Add(supportedGranularity[appConfig.Granularity])
+		endInterval = time.Now().Truncate(supportedGranularity[appConfig.Granularity])
+		startInterval = endInterval.Add(-(supportedGranularity[appConfig.Granularity]))
 	}
+	fmt.Printf("Gettings queue interval stats for %s to %s\n", startInterval.Format(timeFormat), endInterval.Format(timeFormat))
 
 	// Create the following query to use in API call
 	/*{
