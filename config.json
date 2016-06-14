@@ -1,7 +1,7 @@
 {
     "pureCloudRegion": "mypurecloud.com.au",
-    "pureCloudClientId": "62efbdcb-7e92-4f15-bf90-f6bcef9bcd38",
-    "pureCloudClientSecret": "ad6xRwuthCdjKu5uTyJ5AhST4n8pEqwMromZeMbLlko",
+    "pureCloudClientId": "",
+    "pureCloudClientSecret": "",
     "odbcDsn": "DSN=PureCloudStats",
     "granularity": "PT30M",
     "queues": [
