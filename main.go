@@ -36,7 +36,10 @@ const timeFormat string = "2006-01-02T15:04:05-0700"
 const queueIntervalStatsTable string = "QueueIntervalStats"
 
 var appConfig AppConfig // global app config
-var supportedGranularity = map[string]time.Duration{"PT15M": time.Minute * 15, "PT30M": time.Minute * 30, "PT60M": time.Hour * 1, "PT1H": time.Hour * 1, "P1D": time.Hour * 24}
+
+// PureCloud doesn't return service levels if lower than 30 minutes
+var supportedGranularity = map[string]time.Duration{"PT30M": time.Minute * 30, "PT60M": time.Hour * 1, "PT1H": time.Hour * 1, "P1D": time.Hour * 24}
+
 var supportedMediaType = []string{"voice", "chat", "email"}
 var pureCloudToken purecloud.AccessToken
 var db *sql.DB
@@ -50,7 +53,7 @@ func main() {
 	}
 
 	// Connect to ODBC database
-	if db, err = sql.Open("odbc", "DSN="+appConfig.OdbcDsn); err != nil {
+	if db, err = sql.Open("odbc", appConfig.OdbcDsn); err != nil {
 		fmt.Printf("Error: %s\n", err)
 		return
 	}
@@ -77,7 +80,7 @@ func main() {
 	}
 
 	// Get queue interval statistics from PureCloud
-	var resp purecloud.AggregateQueryResponse
+	var resp analytics.AggregateQueryResponse
 	if resp, err = getPureCloudQueueStats(); err != nil {
 		fmt.Printf("Error: %s\n", err)
 		return
@@ -111,7 +114,7 @@ func getPureCloudQueues() (queues map[string]string, err error) {
 	return
 }
 
-func getPureCloudQueueStats() (resp purecloud.AggregateQueryResponse, err error) {
+func getPureCloudQueueStats() (resp analytics.AggregateQueryResponse, err error) {
 	// Format interval parameter for PureCloud's API call
 	var startInterval, endInterval time.Time
 	var y, d int
@@ -134,7 +137,7 @@ func getPureCloudQueueStats() (resp purecloud.AggregateQueryResponse, err error)
 	/*{
 	   "interval": "2016-06-08T00:00:00+08:00/2016-06-09T00:00:00+08:00",
 	   "granularity": "P1D",
-	   "groupBy": [ "mediaType", "queueId" ],
+	   "groupBy": [ "queueId" ],
 	   "filter": {
 	       "type": "and",
 	       "clauses": [
@@ -153,30 +156,28 @@ func getPureCloudQueueStats() (resp purecloud.AggregateQueryResponse, err error)
 	              ]
 	           }
 	       ]
-	   },
-	   "flattenMultivaluedDimensions": true
+	   }
 	}*/
 
-	var query = purecloud.AggregationQuery{
-		Interval:    startInterval.Format(timeFormat) + "/" + endInterval.Format(timeFormat),
+	var query = analytics.AggregationQuery{
+		Interval:    "2016-01-01T00:00:00+08:00/2016-06-15T00:00:00+08:00", //startInterval.Format(timeFormat) + "/" + endInterval.Format(timeFormat),
 		Granularity: appConfig.Granularity,
-		Filter: &purecloud.AnalyticsQueryFilter{
+		Filter: &analytics.AnalyticsQueryFilter{
 			Type: "and",
 		},
-		GroupBy: []string{"mediaType", "queueId"},
-		FlattenMultiValuedDimensions: true,
+		GroupBy: []string{"queueId"},
 	}
 
 	// Add media type clause into the query
-	var mediaTypeClause = purecloud.AnalyticsQueryClause{Type: "or"}
+	var mediaTypeClause = analytics.AnalyticsQueryClause{Type: "or"}
 	for _, mediaType := range supportedMediaType {
-		mediaTypeClause.Predicates = append(mediaTypeClause.Predicates, purecloud.AnalyticsQueryPredicate{Dimension: "mediaType", Value: mediaType})
+		mediaTypeClause.Predicates = append(mediaTypeClause.Predicates, analytics.AnalyticsQueryPredicate{Dimension: "mediaType", Value: mediaType})
 	}
 
 	// Add queue ID clause into the query
-	var queueIDClause = purecloud.AnalyticsQueryClause{Type: "or"}
+	var queueIDClause = analytics.AnalyticsQueryClause{Type: "or"}
 	for _, queueID := range appConfig.Queues {
-		queueIDClause.Predicates = append(queueIDClause.Predicates, purecloud.AnalyticsQueryPredicate{Dimension: "queueId", Value: queueID})
+		queueIDClause.Predicates = append(queueIDClause.Predicates, analytics.AnalyticsQueryPredicate{Dimension: "queueId", Value: queueID})
 	}
 
 	// Append the clauses to the query. We do it last because Go's append returns a new copy of the slice
@@ -221,7 +222,7 @@ func loadAppConfig(configFile string) (err error) {
 
 	// Validate granularity in config file
 	if _, valid := supportedGranularity[appConfig.Granularity]; valid == false {
-		err = errors.New("Invalid granularity. Use PT15M, PT30M, PT60M, PT1H or P1D")
+		err = errors.New("Invalid granularity. Use PT30M, PT60M, PT1H or P1D")
 		return
 	}
 
@@ -250,26 +251,23 @@ func prepareDbTables() {
 	}*/
 
 	// Create table, if error, just print it out and continue
-	if _, err = db.Exec("CREATE TABLE " + queueIntervalStatsTable + " (QueueID VARCHAR, QueueName VARCHAR, MediaType VARCHAR, Interval DATETIME, " +
-		"nError LONG, " +
-		"nOffered LONG, " +
-		"nOutboundAbandoned LONG, " +
-		"nOutboundAttempted LONG, " +
-		"nOutboundConnected LONG, " +
-		"nTransferred LONG, " +
-		"nOverSla LONG, " +
-		"tAbandon DOUBLE, mtAbandon DOUBLE, nAbandon LONG, " +
-		"tAcd DOUBLE, mtAcd DOUBLE, nAcd LONG, " +
-		"tAcw DOUBLE, mtAcw DOUBLE, nAcw LONG, " +
-		"tAgentResponseTime DOUBLE, mtAgentResponseTime DOUBLE, nAgentResponseTime LONG, " +
-		"tAnswered DOUBLE, mtAnswered DOUBLE, nAnswered LONG, " +
-		"tHandle DOUBLE, mtHandle DOUBLE, nHandle LONG, " +
-		"tHeld DOUBLE, mtHeld DOUBLE, nHeld LONG, " +
-		"tHeldComplete DOUBLE, mtHeldComplete DOUBLE, nHeldComplete LONG, " +
-		"tIvr DOUBLE, mtIvr DOUBLE, nIvr LONG, " +
-		"tTalk DOUBLE, mtTalk DOUBLE, nTalk LONG, " +
-		"tTalkComplete DOUBLE, mtTalkComplete DOUBLE, nTalkComplete LONG, " +
-		"tUserResponseTime DOUBLE, mtUserResponseTime DOUBLE, nUserResponseTime LONG)"); err != nil {
+	if _, err = db.Exec("CREATE TABLE " + queueIntervalStatsTable + " (QueueID VARCHAR(50), QueueName VARCHAR(100), MediaType VARCHAR(10), Interval datetime, " +
+		"oServiceTarget float, oServiceLevel float, " +
+		"nError int, nOffered int, nOutboundAbandoned int, nOutboundAttempted int, " +
+		"nOutboundConnected int, nTransferred int, nOverSla int, " +
+		"tAbandon float, mtAbandon float, nAbandon int, " +
+		"tAcd float, mtAcd float, nAcd int, " +
+		"tAcw float, mtAcw float, nAcw int, " +
+		"tAgentResponseTime float, mtAgentResponseTime float, nAgentResponseTime int, " +
+		"tAnswered float, mtAnswered float, nAnswered int, " +
+		"tHandle float, mtHandle float, nHandle int, " +
+		"tHeld float, mtHeld float, nHeld int, " +
+		"tHeldComplete float, mtHeldComplete float, nHeldComplete int, " +
+		"tIvr float, mtIvr float, nIvr int, " +
+		"tTalk float, mtTalk float, nTalk int, " +
+		"tTalkComplete float, mtTalkComplete float, nTalkComplete int, " +
+		"tWait float, mtWait float, nWait int, " +
+		"tUserResponseTime float, mtUserResponseTime float, nUserResponseTime int)"); err != nil {
 		fmt.Println(err)
 	}
 
@@ -299,7 +297,7 @@ func queueIntervalExists(queueID string, mediaType string, interval time.Time) (
 }
 
 // writeQueueStatsToDb writes queue interval statistics in the response from /api/v2/analytics/conversations/aggregates/query into a database.
-func writeQueueStatsToDb(dataset purecloud.AggregateQueryResponse, queueMap map[string]string) (err error) {
+func writeQueueStatsToDb(dataset analytics.AggregateQueryResponse, queueMap map[string]string) (err error) {
 	var i int
 
 	// Loop through results[]
@@ -320,9 +318,11 @@ func writeQueueStatsToDb(dataset purecloud.AggregateQueryResponse, queueMap map[
 			// declare variables here so that it gets initialized for every interval, each loop
 			var interval time.Time
 			var nError, nOffered, nOutboundAbandoned, nOutboundAttempted, nOutboundConnected, nTransferred, nOverSLA int
-			var nAbandon, nAcd, nAcw, nAgentResponseTime, nAnswered, nHandle, nHeld, nHeldComplete, nIvr, nTalk, nTalkComplete, nUserResponseTime int
+			var oServiceLevel, oServiceTarget float64
+			var nAbandon, nAcd, nAcw, nAgentResponseTime, nAnswered, nHandle, nHeld, nHeldComplete, nIvr, nTalk, nTalkComplete, nUserResponseTime, nWait int
 			var tAbandon, mtAbandon, tAcd, mtAcd, tAcw, mtAcw, tAgentResponseTime, mtAgentResponseTime, tAnswered, mtAnswered, tHandle, mtHandle float64
 			var tHeld, mtHeld, tHeldComplete, mtHeldComplete, tIvr, mtIvr, tTalk, mtTalk, tTalkComplete, mtTalkComplete, tUserResponseTime, mtUserResponseTime float64
+			var tWait, mtWait float64
 
 			var s []string
 			s = strings.Split(data.Interval, "/")
@@ -342,10 +342,16 @@ func writeQueueStatsToDb(dataset purecloud.AggregateQueryResponse, queueMap map[
 					nOutboundAttempted = int(metric.Stats.Count)
 				case metric.Metric == "nOutboundConnected":
 					nOutboundConnected = int(metric.Stats.Count)
-				case metric.Metric == "nTransferred":
-					nTransferred = int(metric.Stats.Count)
 				case metric.Metric == "nOverSla":
 					nOverSLA = int(metric.Stats.Count)
+				case metric.Metric == "nTransferred":
+					nTransferred = int(metric.Stats.Count)
+				case metric.Metric == "oInteracting": // ignore this metric
+				case metric.Metric == "oServiceLevel":
+					oServiceLevel = metric.Stats.Ratio
+				case metric.Metric == "oServiceTarget":
+					oServiceTarget = metric.Stats.Current
+				case metric.Metric == "oWaiting": // ignore this metric
 				case metric.Metric == "tAbandon":
 					tAbandon = metric.Stats.Sum
 					mtAbandon = metric.Stats.Max
@@ -394,6 +400,10 @@ func writeQueueStatsToDb(dataset purecloud.AggregateQueryResponse, queueMap map[
 					tUserResponseTime = metric.Stats.Sum
 					mtUserResponseTime = metric.Stats.Max
 					nUserResponseTime = int(metric.Stats.Count)
+				case metric.Metric == "tWait":
+					tWait = metric.Stats.Sum
+					mtWait = metric.Stats.Max
+					nWait = int(metric.Stats.Count)
 				default:
 					panic(fmt.Sprintf("Unrecognized metric %s", metric.Metric))
 				}
@@ -407,33 +417,43 @@ func writeQueueStatsToDb(dataset purecloud.AggregateQueryResponse, queueMap map[
 				return
 			}
 			if exists == true {
-				fmt.Printf("Updating record %d\r", i+1)
+				fmt.Printf("Updating record %d\n", i+1)
 				t = fmt.Sprintf("UPDATE "+queueIntervalStatsTable+" SET "+
 					"nError = %d, nOffered = %d, nOutboundAbandoned = %d, nOutboundAttempted = %d, nOutboundConnected = %d, nTransferred = %d, nOverSla = %d, "+
+					"oServiceLevel = %f, oServiceTarget = %f, "+
 					"tAbandon = %f, mtAbandon = %f, nAbandon = %d, tAcd = %f, mtAcd = %f, nAcd = %d, tAcw = %f, mtAcw = %f, nAcw = %d, tAgentResponseTime = %f, mtAgentResponseTime = %f, nAgentResponseTime = %d, "+
 					"tAnswered = %f, mtAnswered = %f, nAnswered = %d, tHandle = %f, mtHandle = %f, nHandle = %d, tHeld = %f, mtHeld = %f, nHeld = %d, tHeldComplete = %f, mtHeldComplete = %f, nHeldComplete = %d, "+
-					"tIvr = %f, mtIvr = %f, nIvr = %d, tTalk = %f, mtTalk = %f, nTalk = %d, tTalkComplete = %f, mtTalkComplete = %f, nTalkComplete = %d, tUserResponseTime = %f, mtUserResponseTime = %f, nUserResponseTime = %d "+
+					"tIvr = %f, mtIvr = %f, nIvr = %d, tTalk = %f, mtTalk = %f, nTalk = %d, tTalkComplete = %f, mtTalkComplete = %f, nTalkComplete = %d, tUserResponseTime = %f, mtUserResponseTime = %f, nUserResponseTime = %d, "+
+					"tWait = %f, mtWait = %f, nWait = %d "+
 					"WHERE QueueId = '%s' AND MediaType = '%s' AND Interval = {ts '%s'}",
 					nError, nOffered, nOutboundAbandoned, nOutboundAttempted, nOutboundConnected, nTransferred, nOverSLA,
+					oServiceLevel, oServiceTarget,
 					tAbandon, mtAbandon, nAbandon, tAcd, mtAcd, nAcd, tAcw, mtAcw, nAcw, tAgentResponseTime, mtAgentResponseTime, nAgentResponseTime,
 					tAnswered, mtAnswered, nAnswered, tHandle, mtHandle, nHandle, tHeld, mtHeld, nHeld, tHeldComplete, mtHeldComplete, nHeldComplete,
 					tIvr, mtIvr, nIvr, tTalk, mtTalk, nTalk, tTalkComplete, mtTalkComplete, nTalkComplete, tUserResponseTime, mtUserResponseTime, nUserResponseTime,
+					tWait, mtWait, nWait,
 					queueID, mediaType, interval.Format("2006-01-02 15:04:05"))
 			} else {
-				fmt.Printf("Inserting record %d\r", i+1)
+				fmt.Printf("Inserting record %d\n", i+1)
 				t = fmt.Sprintf("INSERT INTO "+queueIntervalStatsTable+" ("+
 					"QueueID, QueueName, MediaType, Interval, nError, nOffered, nOutboundAbandoned, nOutboundAttempted, nOutboundConnected, nTransferred, nOverSla, "+
+					"oServiceLevel, oServiceTarget, "+
 					"tAbandon, mtAbandon, nAbandon, tAcd, mtAcd, nAcd, tAcw, mtAcw, nAcw, tAgentResponseTime, mtAgentResponseTime, nAgentResponseTime, "+
 					"tAnswered, mtAnswered, nAnswered, tHandle, mtHandle, nHandle, tHeld, mtHeld, nHeld, tHeldComplete, mtHeldComplete, nHeldComplete, "+
-					"tIvr, mtIvr, nIvr, tTalk, mtTalk, nTalk, tTalkComplete, mtTalkComplete, nTalkComplete, tUserResponseTime, mtUserResponseTime, nUserResponseTime) "+
+					"tIvr, mtIvr, nIvr, tTalk, mtTalk, nTalk, tTalkComplete, mtTalkComplete, nTalkComplete, tUserResponseTime, mtUserResponseTime, nUserResponseTime, "+
+					"tWait, mtWait, nWait) "+
 					"VALUES ('%s', '%s', '%s', {ts '%s'}, %d, %d, %d, %d, %d, %d, %d, "+
+					"%f, %f, "+
 					"%f, %f, %d, %f, %f, %d, %f, %f, %d, %f, %f, %d, "+
 					"%f, %f, %d, %f, %f, %d, %f, %f, %d, %f, %f, %d, "+
-					"%f, %f, %d, %f, %f, %d, %f, %f, %d, %f, %f, %d)",
+					"%f, %f, %d, %f, %f, %d, %f, %f, %d, %f, %f, %d, "+
+					"%f, %f, %d)",
 					queueID, queueName, mediaType, interval.Format("2006-01-02 15:04:05"), nError, nOffered, nOutboundAbandoned, nOutboundAttempted, nOutboundConnected, nTransferred, nOverSLA,
+					oServiceLevel, oServiceTarget,
 					tAbandon, mtAbandon, nAbandon, tAcd, mtAcd, nAcd, tAcw, mtAcw, nAcw, tAgentResponseTime, mtAgentResponseTime, nAgentResponseTime,
 					tAnswered, mtAnswered, nAnswered, tHandle, mtHandle, nHandle, tHeld, mtHeld, nHeld, tHeldComplete, mtHeldComplete, nHeldComplete,
-					tIvr, mtIvr, nIvr, tTalk, mtTalk, nTalk, tTalkComplete, mtTalkComplete, nTalkComplete, tUserResponseTime, mtUserResponseTime, nUserResponseTime)
+					tIvr, mtIvr, nIvr, tTalk, mtTalk, nTalk, tTalkComplete, mtTalkComplete, nTalkComplete, tUserResponseTime, mtUserResponseTime, nUserResponseTime,
+					tWait, mtWait, nWait)
 			}
 
 			if _, err = db.Exec(t); err != nil {
